@@ -4,6 +4,7 @@ import { createApi } from "../lib/server/api.ts";
 import { MAX_POLLS, WORKFLOW_TIMEOUT_MS } from "../lib/transcript.ts";
 import { MAX_EXTERNAL_BYTES } from "../lib/server/supadata.ts";
 import { allowedOrigins } from "../lib/origins.ts";
+import { createSession, SESSION_COOKIE } from "../lib/server/session.ts";
 
 const code = "test-access-code-123456789";
 const key = "test-provider-key-should-never-leak";
@@ -15,7 +16,7 @@ const providerTranscript = { content: "Olá mundo!\nTexto completo 🎬", lang: 
 function request(body: unknown, headers: Record<string, string> = {}) {
   return new Request("http://localhost:3000/api/transcript", {
     method: "POST",
-    headers: { "content-type": "application/json", origin: "http://localhost:3000", "x-app-access-code": code, ...headers },
+    headers: { "content-type": "application/json", origin: "http://localhost:3000", cookie: `${SESSION_COOKIE}=${createSession(code, now)}`, ...headers },
     body: JSON.stringify(body),
   });
 }
@@ -36,13 +37,13 @@ test("extração síncrona usa exclusivamente native, texto completo e URL canô
   const response = await api.extract(request({ url: original, mode: "generate", lang: "en" }));
   assert.equal(response.status, 200);
   assert.deepEqual(await response.json(), {
-    status: "completed", transcript: { originalUrl: original, videoId: "dQw4w9WgXcQ", language: "pt-BR", text: providerTranscript.content },
+    status: "completed", transcript: { originalUrl: original, videoId: "dQw4w9WgXcQ", language: "pt-BR", text: providerTranscript.content, segments: [] },
   });
   const { url, init } = calls[0];
   assert.equal(url.origin, "https://api.supadata.ai");
   assert.equal(url.pathname, "/v1/transcript");
   assert.equal(url.searchParams.get("mode"), "native");
-  assert.equal(url.searchParams.get("text"), "true");
+  assert.equal(url.searchParams.get("text"), "false");
   assert.equal(url.searchParams.get("url"), "https://www.youtube.com/watch?v=dQw4w9WgXcQ");
   assert.equal(url.searchParams.has("lang"), false);
   assert.equal(new Headers(init?.headers).get("x-api-key"), key);
@@ -72,9 +73,9 @@ for (const nested of [true, false]) {
 
 for (const action of ["extract", "status"] as const) {
   for (const received of ["", "wrong", "x".repeat(257)]) {
-    test(`${action}: rejeita código inválido antes de consultar o provedor (${received.length})`, async () => {
+    test(`${action}: rejeita sessão inválida antes de consultar o provedor (${received.length})`, async () => {
       const { api, calls } = fixture([]);
-      const response = await api[action](request({ url: original }, { "x-app-access-code": received }));
+      const response = await api[action](request({ url: original }, { cookie: `${SESSION_COOKIE}=${received}` }));
       assert.equal(response.status, 401);
       assert.equal(calls.length, 0);
       const body = await response.text();
@@ -183,7 +184,7 @@ test("ticket não pode ser forjado, alterado, reutilizado após expiração ou u
   assert.equal((await api.status(request({ ticket: Buffer.from(JSON.stringify(changed)).toString("base64url") + "." + signature }))).status, 400);
   const otherCode = "another-test-access-code";
   const other = fixture([], { ...env, APP_ACCESS_CODE: otherCode });
-  assert.equal((await other.api.status(request({ ticket }, { "x-app-access-code": otherCode }))).status, 400);
+  assert.equal((await other.api.status(request({ ticket }, { cookie: `${SESSION_COOKIE}=${createSession(otherCode, now)}` }))).status, 400);
   clock += WORKFLOW_TIMEOUT_MS;
   assert.equal((await api.status(request({ ticket }))).status, 408);
   assert.equal(calls.length, 1);
@@ -226,7 +227,27 @@ for (const [name, responder, expected] of [
 }
 
 test("preserva todos os segmentos se o provedor retornar chunks", async () => {
-  const { api } = fixture([() => Response.json({ content: [{ text: "Primeiro" }, { text: "Último" }], lang: "pt" })]);
+  const segments = [{ text: "Primeiro", offset: 0, duration: 1500 }, { text: "Último", offset: 3723000, duration: 2000 }];
+  const { api } = fixture([() => Response.json({ content: segments, lang: "pt" })]);
   const data = await (await api.extract(request({ url: original }))).json();
   assert.equal(data.transcript.text, "Primeiro\nÚltimo");
+  assert.deepEqual(data.transcript.segments, segments);
+});
+
+test("fluxo assíncrono preserva os tempos originais sem gerar nem traduzir", async () => {
+  const segments = [{ text: "Olá!", offset: 12500, duration: 2000 }];
+  const { api } = fixture([
+    () => Response.json({ jobId: "timestamps" }, { status: 202 }),
+    () => Response.json({ status: "completed", result: { content: segments, lang: "pt" } }),
+  ]);
+  const { ticket } = await (await api.extract(request({ url: original }))).json();
+  const result = await (await api.status(request({ ticket }))).json();
+  assert.deepEqual(result.transcript.segments, segments);
+});
+
+test("recusa segmentos com tempos ausentes ou inválidos", async () => {
+  for (const offset of [undefined, -1, null, "1000"]) {
+    const { api } = fixture([() => Response.json({ content: [{ text: "Olá", offset, duration: 1000 }], lang: "pt" })]);
+    assert.equal((await api.extract(request({ url: original }))).status, 502);
+  }
 });

@@ -8,6 +8,13 @@ export interface Transcript {
   videoId: string;
   language: string;
   text: string;
+  segments?: TranscriptSegment[];
+}
+
+export interface TranscriptSegment {
+  text: string;
+  offset: number;
+  duration: number;
 }
 
 export type TranscriptResponse =
@@ -46,11 +53,24 @@ export function parseYouTubeUrl(input: unknown) {
   };
 }
 
-// A code block preserves the complete transcript, even when it contains Markdown.
+export function formatTimestamp(milliseconds: number): string {
+  const seconds = Math.floor(milliseconds / 1000);
+  const parts = [Math.floor(seconds / 60) % 60, seconds % 60];
+  if (seconds >= 3600) parts.unshift(Math.floor(seconds / 3600));
+  return parts.map((part) => String(part).padStart(2, "0")).join(":");
+}
+
+export function transcriptText(transcript: Transcript): string {
+  if (!transcript.segments?.length) return transcript.text;
+  return transcript.segments.map((segment) => `[${formatTimestamp(segment.offset)}] ${segment.text}`).join("\n\n");
+}
+
+// Both clipboard and download use this exact format, preserving literal text.
 export function toMarkdown(transcript: Transcript): string {
-  const runs = transcript.text.match(/`+/g) ?? [];
+  const text = transcriptText(transcript);
+  const runs = text.match(/`+/g) ?? [];
   const fence = "`".repeat(runs.reduce((max, run) => Math.max(max, run.length + 1), 3));
-  return `# Transcrição do YouTube\n\nLink original: <${transcript.originalUrl}>\n\nIdioma identificado: ${transcript.language}\n\n## Texto completo\n\n${fence}text\n${transcript.text}\n${fence}\n`;
+  return `# Transcrição do YouTube\n\nLink original: <${transcript.originalUrl}>\n\nIdioma identificado: ${transcript.language}\n\n## Texto completo\n\n${fence}text\n${text}\n${fence}\n`;
 }
 
 export function markdownFilename(transcript: Transcript): string {

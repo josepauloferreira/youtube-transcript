@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState, type FormEvent } from "react";
 import Link from "next/link";
-import { extractTranscript } from "@/lib/client";
+import { extractTranscript, SessionExpiredError } from "@/lib/client";
 import { markdownFilename, MAX_URL_LENGTH, parseYouTubeUrl, toMarkdown, type Transcript } from "@/lib/transcript";
 import { Icon } from "./icon";
 
@@ -14,12 +14,11 @@ type ViewState =
 
 export function TranscriptApp() {
   const [url, setUrl] = useState("");
-  const [accessCode, setAccessCode] = useState("");
   const [state, setState] = useState<ViewState>({ kind: "idle" });
   const [notice, setNotice] = useState("");
   const request = useRef<AbortController | null>(null);
   const download = useRef<string | null>(null);
-  const text = useRef<HTMLDivElement>(null);
+  const text = useRef<HTMLTextAreaElement>(null);
   const resultHeading = useRef<HTMLHeadingElement>(null);
   const loading = state.kind === "loading";
 
@@ -44,7 +43,7 @@ export function TranscriptApp() {
     request.current = controller;
     setState({ kind: "loading", polling: false });
     try {
-      const transcript = await extractTranscript(url.trim(), accessCode, {
+      const transcript = await extractTranscript(url.trim(), {
         signal: controller.signal,
         onPending: () => setState({ kind: "loading", polling: true }),
       });
@@ -56,6 +55,7 @@ export function TranscriptApp() {
       requestAnimationFrame(() => resultHeading.current?.focus());
     } catch (error) {
       if (controller.signal.aborted) return;
+      if (error instanceof SessionExpiredError) { window.location.replace("/"); return; }
       const message = error instanceof Error && error.name === "TimeoutError"
         ? "O tempo de espera terminou. Tente novamente mais tarde."
         : error instanceof TypeError ? "Não foi possível conectar ao servidor. Verifique sua conexão."
@@ -69,18 +69,24 @@ export function TranscriptApp() {
   async function copy() {
     if (state.kind !== "success") return;
     try {
-      await navigator.clipboard.writeText(state.transcript.text);
-      setNotice("Texto completo copiado.");
+      await navigator.clipboard.writeText(toMarkdown(state.transcript));
+      setNotice("Transcrição copiada com link, idioma e tempos disponíveis.");
     } catch {
       if (text.current) {
-        const range = document.createRange();
-        range.selectNodeContents(text.current);
-        const selection = window.getSelection();
-        selection?.removeAllRanges();
-        selection?.addRange(range);
+        text.current.focus();
+        text.current.select();
+        text.current.setSelectionRange(0, text.current.value.length);
       }
       setNotice("A cópia automática não foi permitida. O texto foi selecionado; use a opção Copiar do seu navegador.");
     }
+  }
+
+  async function logout() {
+    try {
+      const response = await fetch("/api/session", { method: "DELETE", credentials: "same-origin", signal: AbortSignal.timeout(15000) });
+      if (!response.ok) throw new Error();
+      window.location.replace("/");
+    } catch { setNotice("Não foi possível sair. Verifique sua conexão e tente novamente."); }
   }
 
   return <div className="app-shell">
@@ -90,7 +96,7 @@ export function TranscriptApp() {
         <span className="brand-mark"><Icon name="play" /></span>
         <span>YouTube <span className="font-normal text-muted">Transcript</span></span>
       </Link>
-      <span className="native-badge hidden sm:inline-flex"><span /> Legendas originais</span>
+      <div className="flex items-center gap-4"><span className="native-badge hidden sm:inline-flex"><span /> Legendas originais</span><button type="button" onClick={logout} disabled={loading} className="inline-link min-h-11 text-xs">Sair</button></div>
     </header>
 
     <main id="main" className="mx-auto w-full max-w-3xl px-5 pb-12 pt-8 sm:px-8 sm:pt-14">
@@ -109,12 +115,6 @@ export function TranscriptApp() {
             <input id="video-url" name="url" type="url" inputMode="url" required maxLength={MAX_URL_LENGTH} autoComplete="off" spellCheck={false} placeholder="https://www.youtube.com/watch?v=..." value={url} onChange={(event) => setUrl(event.target.value)} disabled={loading} className="field pl-11" aria-describedby="url-help" />
           </div>
           <p id="url-help" className="mt-2 text-xs leading-5 text-muted">Aceita links de vídeos, youtu.be e Shorts.</p>
-          <label className="field-label mt-5 block" htmlFor="access-code">Código de acesso</label>
-          <div className="relative mt-2">
-            <span className="input-icon"><Icon name="lock" /></span>
-            <input id="access-code" name="access-code" type="password" required maxLength={256} autoComplete="off" placeholder="Informe seu código de acesso" value={accessCode} onChange={(event) => setAccessCode(event.target.value)} disabled={loading} className="field pl-11" aria-describedby="access-help" />
-          </div>
-          <p id="access-help" className="mt-2 text-xs leading-5 text-muted">Use o código fornecido pelo responsável pela aplicação.</p>
           <button type="submit" disabled={loading} className="primary-button mt-6 w-full">
             {loading ? <><span className="spinner" /> Extraindo legendas…</> : <>Extrair transcrição <Icon name="arrow" /></>}
           </button>
@@ -135,9 +135,9 @@ export function TranscriptApp() {
 
         {state.kind === "success" ? <div className="px-5 pb-6 sm:px-7">
           <div className="mb-4 flex flex-wrap items-center gap-x-4 gap-y-2 text-xs text-muted"><span>Idioma: <strong className="text-foreground">{state.transcript.language}</strong></span><a href={state.transcript.originalUrl} target="_blank" rel="noopener noreferrer" className="inline-link">Abrir vídeo original ↗</a></div>
-          <div ref={text} tabIndex={0} role="region" aria-label="Texto completo da transcrição" lang={state.transcript.language} className="transcript-text">{state.transcript.text}</div>
+          <textarea ref={text} readOnly aria-label="Transcrição formatada com link e tempos" lang={state.transcript.language} className="transcript-text w-full resize-y" rows={14} value={toMarkdown(state.transcript)} />
           <div className="mt-5 grid gap-3 sm:grid-cols-2">
-            <button type="button" onClick={copy} className="secondary-button"><Icon name="copy" /> Copiar texto</button>
+            <button type="button" onClick={copy} className="secondary-button"><Icon name="copy" /> Copiar transcrição</button>
             <a href={state.downloadUrl} download={markdownFilename(state.transcript)} target="_blank" rel="noopener" className="secondary-button"><Icon name="download" /> Baixar Markdown</a>
           </div>
           <p className="mt-3 text-xs leading-5 text-muted">Arquivo .md em UTF-8, com link original, idioma e texto completo. No iPhone, se o arquivo abrir, use Compartilhar → Salvar em Arquivos.</p>

@@ -16,13 +16,16 @@ function pause(ms: number, signal: AbortSignal): Promise<void> {
   });
 }
 
-export async function extractTranscript(url: string, accessCode: string, options: Options): Promise<Transcript> {
+export class SessionExpiredError extends Error {}
+
+export async function extractTranscript(url: string, options: Options): Promise<Transcript> {
   const signal = AbortSignal.any([options.signal, AbortSignal.timeout(WORKFLOW_TIMEOUT_MS)]);
   const fetcher = options.fetcher ?? fetch;
   async function post(path: string, body: object): Promise<TranscriptResponse> {
     const response = await fetcher(path, {
       method: "POST",
-      headers: { "Content-Type": "application/json", "x-app-access-code": accessCode },
+      headers: { "Content-Type": "application/json" },
+      credentials: "same-origin",
       body: JSON.stringify(body),
       cache: "no-store",
       signal: AbortSignal.any([signal, AbortSignal.timeout(25_000)]),
@@ -30,6 +33,7 @@ export async function extractTranscript(url: string, accessCode: string, options
     let data;
     try { data = await response.json(); }
     catch { throw new Error("O servidor retornou uma resposta inválida. Tente novamente."); }
+    if (response.status === 401) throw new SessionExpiredError("Sua sessão expirou. Entre novamente.");
     if (!response.ok) throw new Error(data.error?.message ?? "Não foi possível extrair as legendas.");
     if (data.status !== "completed" && (data.status !== "pending" || typeof data.ticket !== "string")) {
       throw new Error("O servidor retornou uma resposta inválida. Tente novamente.");

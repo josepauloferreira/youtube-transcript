@@ -1,6 +1,7 @@
 import "server-only";
 import { AppError, externalError } from "./errors.ts";
 import { isRecord, readLimitedJson } from "./http.ts";
+import type { TranscriptSegment } from "../transcript.ts";
 
 export const UPSTREAM_TIMEOUT_MS = 15_000;
 export const MAX_EXTERNAL_BYTES = 2_000_000;
@@ -8,7 +9,7 @@ const API_URL = "https://api.supadata.ai/v1/transcript";
 const JOB_ID = /^[A-Za-z0-9_-]{1,128}$/;
 
 export type ProviderResult =
-  | { status: "completed"; text: string; language: string }
+  | { status: "completed"; text: string; language: string; segments: TranscriptSegment[] }
   | { status: "pending"; jobId?: string };
 
 export function validJobId(id: unknown): id is string {
@@ -18,13 +19,20 @@ export function validJobId(id: unknown): id is string {
 function parseTranscript(data: unknown): ProviderResult {
   if (!isRecord(data)) throw externalError(502);
   let text: string;
+  let segments: TranscriptSegment[] = [];
   if (typeof data.content === "string") text = data.content;
-  else if (Array.isArray(data.content) && data.content.every((item) => isRecord(item) && typeof item.text === "string")) {
-    text = data.content.map((item) => item.text).join("\n");
+  else if (Array.isArray(data.content)) {
+    segments = data.content.map((item): TranscriptSegment => {
+      if (!isRecord(item) || typeof item.text !== "string" ||
+          typeof item.offset !== "number" || !Number.isFinite(item.offset) || item.offset < 0 || item.offset > Number.MAX_SAFE_INTEGER ||
+          typeof item.duration !== "number" || !Number.isFinite(item.duration) || item.duration < 0 || item.duration > Number.MAX_SAFE_INTEGER) throw externalError(502);
+      return { text: item.text, offset: item.offset, duration: item.duration };
+    });
+    text = segments.map((item) => item.text).join("\n");
   } else throw externalError(502);
   if (!text.trim()) throw externalError(206);
   if (typeof data.lang !== "string" || !/^[A-Za-z]{2,3}(?:-[A-Za-z0-9]{2,8}){0,3}$/.test(data.lang)) throw externalError(502);
-  return { status: "completed", text, language: data.lang };
+  return { status: "completed", text, language: data.lang, segments };
 }
 
 export function createSupadata(apiKey: string | undefined, fetcher: typeof fetch) {
@@ -72,7 +80,7 @@ export function createSupadata(apiKey: string | undefined, fetcher: typeof fetch
   return {
     extract(canonicalUrl: string) {
       const url = new URL(API_URL);
-      url.search = new URLSearchParams({ url: canonicalUrl, mode: "native", text: "true" }).toString();
+      url.search = new URLSearchParams({ url: canonicalUrl, mode: "native", text: "false" }).toString();
       return call(url, false);
     },
     status(jobId: string) {

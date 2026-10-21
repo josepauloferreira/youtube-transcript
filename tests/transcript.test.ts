@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { markdownFilename, MAX_URL_LENGTH, parseYouTubeUrl, toMarkdown } from "../lib/transcript.ts";
+import { formatTimestamp, markdownFilename, MAX_URL_LENGTH, parseYouTubeUrl, toMarkdown, transcriptText } from "../lib/transcript.ts";
 
 const id = "dQw4w9WgXcQ";
 for (const url of [
@@ -49,4 +49,20 @@ test("Markdown preserva link original, idioma, Unicode e todo o texto sem interp
 test("Markdown suporta muitos delimitadores sem estouro da pilha", () => {
   const text = "` palavra ".repeat(150_000);
   assert.ok(toMarkdown({ originalUrl: `https://youtu.be/${id}`, videoId: id, language: "en", text }).includes(text));
+});
+
+test("cópia e Markdown incluem link, idioma e todos os tempos reais", () => {
+  const transcript = {
+    originalUrl: `https://youtu.be/${id}?t=20`, videoId: id, language: "pt-BR", text: "Olá!\nAté mais.",
+    segments: [{ text: "Olá!", offset: 12500, duration: 1500 }, { text: "Até mais.", offset: 3723000, duration: 2000 }],
+  };
+  assert.equal(formatTimestamp(0), "00:00");
+  assert.equal(formatTimestamp(59999), "00:59");
+  assert.equal(formatTimestamp(60000), "01:00");
+  assert.equal(formatTimestamp(3723000), "01:02:03");
+  assert.equal(transcriptText(transcript), "[00:12] Olá!\n\n[01:02:03] Até mais.");
+  const output = toMarkdown(transcript);
+  assert.ok(output.includes(transcript.originalUrl));
+  assert.ok(output.includes("Idioma identificado: pt-BR"));
+  assert.ok(output.includes("[00:12] Olá!\n\n[01:02:03] Até mais."));
 });

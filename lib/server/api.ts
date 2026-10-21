@@ -25,7 +25,7 @@ export function createApi({ env, fetcher, now = Date.now }: Dependencies) {
   function handler(action: (body: Record<string, unknown>, secret: string) => Promise<TranscriptResponse>) {
     return async (request: Request): Promise<Response> => {
       try {
-        const secret = authorize(request, env);
+        const secret = authorize(request, env, now());
         if (request.headers.get("content-type")?.split(";")[0].trim() !== "application/json") {
           throw new AppError(415, "CONTENT_TYPE", "Envie a solicitação como JSON.");
         }
@@ -53,7 +53,7 @@ export function createApi({ env, fetcher, now = Date.now }: Dependencies) {
       const expiresAt = now() + WORKFLOW_TIMEOUT_MS;
       const result = await provider.extract(video.canonicalUrl);
       if (result.status === "completed") {
-        return { status: "completed", transcript: { originalUrl: video.originalUrl, videoId: video.videoId, language: result.language, text: result.text } };
+        return { status: "completed", transcript: { originalUrl: video.originalUrl, videoId: video.videoId, language: result.language, text: result.text, segments: result.segments } };
       }
       if (!result.jobId) throw new AppError(502, "UPSTREAM_ERROR", "O serviço retornou uma consulta inválida.");
       return { status: "pending", ticket: signTicket({ jobId: result.jobId, originalUrl: video.originalUrl, expiresAt, attempt: 0 }, secret) };
@@ -64,7 +64,7 @@ export function createApi({ env, fetcher, now = Date.now }: Dependencies) {
       if (now() >= ticket.expiresAt) throw new AppError(408, "POLL_LIMIT", "O tempo de consulta terminou. Tente novamente mais tarde.");
       if (result.status === "completed") {
         const video = parseYouTubeUrl(ticket.originalUrl);
-        return { status: "completed", transcript: { originalUrl: video.originalUrl, videoId: video.videoId, language: result.language, text: result.text } };
+        return { status: "completed", transcript: { originalUrl: video.originalUrl, videoId: video.videoId, language: result.language, text: result.text, segments: result.segments } };
       }
       if (ticket.attempt + 1 >= MAX_POLLS) throw new AppError(408, "POLL_LIMIT", "O limite de consultas foi atingido. Tente novamente mais tarde.");
       return { status: "pending", ticket: signTicket({ ...ticket, attempt: ticket.attempt + 1 }, secret) };
