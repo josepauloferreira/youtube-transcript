@@ -1,6 +1,6 @@
 # YouTube Transcript
 
-MVP em Next.js (App Router), TypeScript e Tailwind CSS, na raiz do repositório. Busca **apenas legendas existentes** de vídeos do YouTube pela Supadata. Exibe e copia o texto completo com link original, idioma e tempos das legendas, no mesmo formato do Markdown UTF-8 para download. Não gera texto por IA, traduz ou resume. Sem banco, histórico ou autenticação externa.
+MVP em Next.js (App Router), TypeScript e Tailwind CSS, na raiz do repositório. Busca **apenas legendas existentes** de vídeos e playlists do YouTube pela Supadata. Playlists são baixadas em ZIP, com um Markdown por vídeo no mesmo formato da extração individual. Exibe e copia o texto completo com link original, idioma e tempos das legendas, no mesmo formato do Markdown UTF-8 para download. Não gera texto por IA, traduz ou resume. Sem banco, histórico ou autenticação externa.
 
 ## Instalação e uso
 
@@ -28,27 +28,42 @@ npm run dev
 
 O servidor escuta em **0.0.0.0:3000**. Abra a porta 3000 na aba **Ports** do Codespaces e use sua URL encaminhada. No desenvolvimento local, abra `http://localhost:3000`.
 
-Entre com sua senha pessoal (o mesmo valor antes usado como código de acesso). A sessão dura 30 dias neste navegador; não é preciso repetir a senha a cada extração. Use **Sair** para encerrar o acesso neste dispositivo. Depois cole uma URL `youtube.com/watch?v=…`, `youtu.be/…` ou `youtube.com/shorts/…` e selecione **Extrair transcrição**. Também são aceitos os hosts exatos `www.youtube.com` e `m.youtube.com`. O vídeo precisa estar disponível publicamente e ter legendas acessíveis. Legendas automáticas já existentes na plataforma também podem ser retornadas.
+Entre com sua senha pessoal (o mesmo valor antes usado como código de acesso). A sessão dura 30 dias neste navegador; não é preciso repetir a senha a cada extração. Use **Sair** para encerrar o acesso neste dispositivo. Depois cole uma URL `youtube.com/watch?v=…`, `youtu.be/…` ou `youtube.com/shorts/…` ou um link `youtube.com/playlist?list=…` e selecione **Extrair**. Links de vídeo que incluam `list=` coletam a playlist. Também são aceitos os hosts exatos `www.youtube.com` e `m.youtube.com`. O vídeo precisa estar disponível publicamente e ter legendas acessíveis. Legendas automáticas já existentes na plataforma também podem ser retornadas.
 
 A interface segue a preferência claro/escuro do sistema. Possui labels, foco visível, navegação por teclado, anúncios de carregamento/erro e texto selecionável. A senha não fica no armazenamento do navegador. Um cookie assinado e HttpOnly mantém a sessão; o resultado permanece somente na memória da página. Trocar `APP_ACCESS_CODE` invalida as sessões existentes.
 
 **Download móvel:** o link aponta diretamente para um Blob preparado após a extração, sem operação assíncrona no clique. A cópia e o arquivo `.md` usam exatamente o mesmo Markdown, com link original, idioma e todo o texto acompanhado de timestamps `[mm:ss]` ou `[hh:mm:ss]`. O download inclui BOM UTF-8. Os tempos vêm dos segmentos originais da Supadata; se o serviço devolver apenas texto, nenhum tempo é inventado. O Blob continua válido enquanto o resultado estiver aberto. Chrome no Android usa o download do navegador. No Safari do iPhone, se houver pré-visualização em vez de download, use **Compartilhar → Salvar em Arquivos**. A cópia exige permissão do navegador; se falhar, o texto é selecionado para cópia manual.
 
+## Playlists
+
+Cole o link da playlist no mesmo campo usado para vídeos. A aplicação reconhece `list=`, consulta os IDs na Supadata e coleta as legendas um vídeo por vez, com intervalo mínimo de um segundo entre consultas, incluindo Shorts e lives retornados pelo provedor. IDs repetidos geram um único arquivo. A ordem das listas do provedor é preservada dentro de cada categoria; não há garantia da ordem intercalada original da playlist.
+
+O ZIP contém `youtube-ID-idioma.md` para cada transcrição disponível e `LEIA-ME.md` com o resultado da coleta. Os arquivos individuais usam a mesma função `toMarkdown` e o mesmo BOM UTF-8 do download avulso: link, idioma, texto completo e tempos reais. Vídeos privados, indisponíveis ou sem legendas são registrados no relatório; os demais continuam. Se nenhum vídeo tiver legenda, o ZIP contém somente o relatório e a interface informa zero arquivos de transcrição.
+
+O progresso mostra quantos vídeos foram consultados e coletados. **Cancelar** interrompe novas consultas e prepara um ZIP com os arquivos já obtidos e a relação dos vídeos restantes. Falta de créditos, limite de requisições, configuração inválida ou perda de conexão também interrompem a coleta e preservam os resultados disponíveis. Não há repetição automática de extrações. Uma sessão expirada exige novo login.
+
+Mantenha a página aberta durante a coleta. O fluxo ocorre no navegador, com requisições separadas de até 30 segundos no servidor e o polling individual existente; não exige banco, fila ou novas variáveis de ambiente. O ZIP é comprimido localmente com `fflate` e preparado antes do clique de download. Fechar ou recarregar a página descarta o resultado, sem retomada automática. Não há limite global de dois minutos para a playlist: o prazo de 120 segundos vale para cada vídeo.
+
+A listagem pede o máximo de 5.000 IDs permitido pela Supadata. Respostas que atinjam esse limite são recusadas explicitamente para evitar entregar uma playlist possivelmente cortada. Os Markdown acumulados têm limite de 100 MiB antes da compressão; ao atingi-lo, os arquivos já obtidos ficam disponíveis no ZIP parcial. Divida playlists maiores. A coleta abrange os vídeos que o provedor consegue enumerar; vídeos ocultos por privacidade ou removidos podem não aparecer na listagem.
+
+Listar a playlist e consultar cada transcrição podem consumir créditos da Supadata, inclusive quando não há legendas, conforme o plano. Consulte o saldo antes de coletar playlists grandes.
+
 ## Integração e limites
 
-Implementação com `fetch`, sem SDK adicional, baseada na documentação oficial consultada em 21/10/2026:
+Implementação com `fetch`, sem SDK adicional, baseada na documentação oficial consultada em 23/10/2026:
 
 - [Supadata — Transcript](https://docs.supadata.ai/get-transcript): `GET /v1/transcript` com `mode=native` e `text=false` para preservar os segmentos com `offset` e `duration` em milissegundos; sem parâmetro `lang` ou fallback para geração.
+- [Supadata — vídeos da playlist](https://docs.supadata.ai/youtube/playlist-videos): `GET /v1/youtube/playlist/videos?id=…&limit=5000`, com as listas `videoIds`, `shortIds` e `liveIds`.
 - [Supadata — erros](https://docs.supadata.ai/errors/list): ausência de legendas (`206`), plano/créditos (`402`), indisponibilidade (`403`/`404`), limite (`429`) e falhas externas.
 - `200` retorna texto imediato; `202` retorna um job. `GET /v1/transcript/{jobId}` aceita `queued`, `active`, `completed` e `failed`. O parser suporta o resultado direto e o envelope `result` mostrado nos exemplos oficiais.
 
-O login usa `POST /api/session` (`{ "password": "…" }`); `DELETE /api/session` encerra a sessão no navegador. A senha é validada no servidor, com comparação de hashes em tempo constante. O cookie de sessão tem prazo de 30 dias, `HttpOnly`, `SameSite=Strict`, caminho `/` e `Secure` em HTTPS/produção. Não há cadastro, banco ou provedor externo de login. As rotas internas `POST /api/transcript` (`{ "url": "…" }`) e `POST /api/transcript/status` (`{ "ticket": "…" }`) exigem `Content-Type: application/json`, `Origin` permitido e sessão válida no servidor. O antigo header `x-app-access-code` não concede acesso. Status exige também um token HMAC emitido na extração, vinculado ao job, link e prazo. O cliente recebe mensagens próprias; corpos de erro da Supadata e credenciais não são expostos nem registrados. Respostas internas e chamadas externas não são armazenadas em cache.
+O login usa `POST /api/session` (`{ "password": "…" }`); `DELETE /api/session` encerra a sessão no navegador. A senha é validada no servidor, com comparação de hashes em tempo constante. O cookie de sessão tem prazo de 30 dias, `HttpOnly`, `SameSite=Strict`, caminho `/` e `Secure` em HTTPS/produção. Não há cadastro, banco ou provedor externo de login. As rotas internas `POST /api/playlist` (`{ "url": "…" }`), `POST /api/transcript` (`{ "url": "…" }`) e `POST /api/transcript/status` (`{ "ticket": "…" }`) exigem `Content-Type: application/json`, `Origin` permitido e sessão válida no servidor. O antigo header `x-app-access-code` não concede acesso. Status exige também um token HMAC emitido na extração, vinculado ao job, link e prazo. O cliente recebe mensagens próprias; corpos de erro da Supadata e credenciais não são expostos nem registrados. Respostas internas e chamadas externas não são armazenadas em cache.
 
 Limites:
 
-- URL: 2.048 caracteres; ID: exatamente 11 caracteres válidos. Hosts exatos, sem credenciais, portas ou caminhos extras. A Supadata recebe uma URL HTTPS canônica, sem parâmetros fornecidos pelo usuário.
+- URL: 2.048 caracteres; ID de vídeo: exatamente 11 caracteres válidos; ID de playlist: de 10 a 128 caracteres alfanuméricos, `_` ou `-`. Hosts exatos, sem credenciais, portas ou caminhos extras. A Supadata recebe uma URL HTTPS canônica, sem parâmetros fornecidos pelo usuário.
 - Corpo da solicitação: 8 KiB; resposta externa: 2.000.000 bytes, contados durante a leitura do stream, inclusive sem `Content-Length`. Conteúdo acima do limite é recusado integralmente, sem truncar o texto.
-- Timeout externo: 15 segundos por chamada, abrangendo o corpo; redirects não são seguidos. Cliente: 25 segundos por requisição e 120 segundos para o fluxo completo. Funções Vercel: limite de 30 segundos.
+- Timeout externo: 15 segundos por chamada, abrangendo o corpo; redirects não são seguidos. Cliente: 25 segundos por requisição e 120 segundos para cada extração individual. Funções Vercel: limite de 30 segundos.
 - Polling: intervalo de 2 segundos, até 30 consultas, com prazo de 120 segundos no token. Sem repetição automática da extração ou fallback. A consulta para em sucesso, erro, expiração ou ao sair da página. O contador do token limita a sequência normal; como a aplicação é sem estado, não impede replay de um token ainda válido por alguém com uma sessão válida.
 
 `APP_ACCESS_CODE` é a senha pessoal deste aplicativo de um único usuário, sem cadastro de contas ou mecanismo distribuído de limitação de tentativas. Não inclua segredos nos links de vídeos. Consultas nativas podem consumir créditos inclusive quando não há legendas, conforme a documentação da Supadata.
@@ -74,7 +89,7 @@ npm run build
 npm run check
 ```
 
-Os testes usam o runner nativo do Node.js 24 e chamadas externas simuladas. Cobrem login, cookies, sessão alterada/expirada, logout, URLs válidas e maliciosas, preservação do Markdown/Unicode e dos tempos, autorização nas duas rotas, origens com proxy, integração síncrona e assíncrona, tokens alterados/expirados, polling limitado, timeouts, tamanho máximo e erros do provedor. Não consomem créditos e não precisam de segredos.
+Os testes usam o runner nativo do Node.js 24 e chamadas externas simuladas. Cobrem login, cookies, sessão alterada/expirada, logout, URLs válidas e maliciosas, preservação do Markdown/Unicode e dos tempos, autorização nas rotas de extração e status, origens com proxy, integração síncrona e assíncrona, tokens alterados/expirados, polling limitado, timeouts, tamanho máximo e erros do provedor. Os testes de playlist passam pelo cliente, API autenticada, provedor simulado e descompactação do ZIP; verificam igualdade dos Markdown, Unicode/BOM, polling, deduplicação, falhas parciais, cancelamento, interrupção por créditos e limites de listagem. Não consomem créditos e não precisam de segredos.
 
 Os testes de sessão incluem login seguido de extração e polling, cookies seguros no Codespaces e em produção, expiração e troca de senha. A validação real em aparelhos físicos continua sendo uma checagem manual.
 

@@ -7,7 +7,7 @@ interface Options {
   pause?: (ms: number, signal: AbortSignal) => Promise<void>;
 }
 
-function pause(ms: number, signal: AbortSignal): Promise<void> {
+export function pause(ms: number, signal: AbortSignal): Promise<void> {
   return new Promise((resolve, reject) => {
     signal.throwIfAborted();
     const abort = () => { clearTimeout(timer); reject(signal.reason); };
@@ -18,23 +18,37 @@ function pause(ms: number, signal: AbortSignal): Promise<void> {
 
 export class SessionExpiredError extends Error {}
 
+export class ApiError extends Error {
+  readonly code: string;
+  readonly status: number;
+  constructor(message: string, code: string, status: number) {
+    super(message);
+    this.code = code;
+    this.status = status;
+  }
+}
+
+export async function postJson(path: string, body: object, signal: AbortSignal, fetcher: typeof fetch = fetch): Promise<unknown> {
+  signal.throwIfAborted();
+  const response = await fetcher(path, {
+    method: "POST", headers: { "Content-Type": "application/json" }, credentials: "same-origin",
+    body: JSON.stringify(body), cache: "no-store",
+    signal: AbortSignal.any([signal, AbortSignal.timeout(25_000)]),
+  });
+  let data;
+  try { data = await response.json(); }
+  catch { throw new Error("O servidor retornou uma resposta inválida. Tente novamente."); }
+  if (response.status === 401) throw new SessionExpiredError("Sua sessão expirou. Entre novamente.");
+  if (!response.ok) throw new ApiError(data.error?.message ?? "Não foi possível extrair as legendas.", data.error?.code ?? "UNKNOWN", response.status);
+  return data;
+}
+
 export async function extractTranscript(url: string, options: Options): Promise<Transcript> {
   const signal = AbortSignal.any([options.signal, AbortSignal.timeout(WORKFLOW_TIMEOUT_MS)]);
   const fetcher = options.fetcher ?? fetch;
   async function post(path: string, body: object): Promise<TranscriptResponse> {
-    const response = await fetcher(path, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      credentials: "same-origin",
-      body: JSON.stringify(body),
-      cache: "no-store",
-      signal: AbortSignal.any([signal, AbortSignal.timeout(25_000)]),
-    });
-    let data;
-    try { data = await response.json(); }
-    catch { throw new Error("O servidor retornou uma resposta inválida. Tente novamente."); }
-    if (response.status === 401) throw new SessionExpiredError("Sua sessão expirou. Entre novamente.");
-    if (!response.ok) throw new Error(data.error?.message ?? "Não foi possível extrair as legendas.");
+    const data = await postJson(path, body, signal, fetcher) as TranscriptResponse;
+    if (!data || typeof data !== "object") throw new Error("O servidor retornou uma resposta inválida. Tente novamente.");
     if (data.status !== "completed" && (data.status !== "pending" || typeof data.ticket !== "string")) {
       throw new Error("O servidor retornou uma resposta inválida. Tente novamente.");
     }

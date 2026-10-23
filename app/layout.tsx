@@ -3,7 +3,7 @@ import "./globals.css";
 
 export const metadata: Metadata = {
   title: "YouTube Transcript — legendas em texto",
-  description: "Extraia as legendas existentes de um vídeo do YouTube, copie o texto completo e baixe em Markdown.",
+  description: "Baixe transcrições do YouTube em Markdown. Vídeos individuais ou playlists completas em ZIP.",
   robots: { index: false, follow: false },
 };
 
@@ -11,8 +11,8 @@ export const viewport: Viewport = {
   width: "device-width",
   initialScale: 1,
   themeColor: [
-    { media: "(prefers-color-scheme: light)", color: "#f7f8fa" },
-    { media: "(prefers-color-scheme: dark)", color: "#101318" },
+    { media: "(prefers-color-scheme: light)", color: "#fafaf9" },
+    { media: "(prefers-color-scheme: dark)", color: "#171716" },
   ],
 };
 

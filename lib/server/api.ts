@@ -5,6 +5,7 @@ import { AppError } from "./errors.ts";
 import { isRecord, readLimitedJson } from "./http.ts";
 import { createSupadata } from "./supadata.ts";
 import { readTicket, signTicket } from "./tickets.ts";
+import { parsePlaylistUrl, type Playlist } from "../playlist.ts";
 
 interface Dependencies {
   env: Readonly<Record<string, string | undefined>>;
@@ -12,7 +13,7 @@ interface Dependencies {
   now?: () => number;
 }
 
-function json(body: TranscriptResponse | { error: { code: string; message: string } }, status = 200) {
+function json(body: TranscriptResponse | Playlist | { error: { code: string; message: string } }, status = 200) {
   return Response.json(body, {
     status,
     headers: { "Cache-Control": "no-store, private", "X-Content-Type-Options": "nosniff" },
@@ -22,7 +23,7 @@ function json(body: TranscriptResponse | { error: { code: string; message: strin
 export function createApi({ env, fetcher, now = Date.now }: Dependencies) {
   const provider = createSupadata(env.SUPADATA_API_KEY, fetcher);
 
-  function handler(action: (body: Record<string, unknown>, secret: string) => Promise<TranscriptResponse>) {
+  function handler(action: (body: Record<string, unknown>, secret: string) => Promise<TranscriptResponse | Playlist>) {
     return async (request: Request): Promise<Response> => {
       try {
         const secret = authorize(request, env, now());
@@ -46,6 +47,13 @@ export function createApi({ env, fetcher, now = Date.now }: Dependencies) {
   }
 
   return {
+    playlist: handler(async (body) => {
+      let playlist: ReturnType<typeof parsePlaylistUrl>;
+      try { playlist = parsePlaylistUrl(body.url); }
+      catch (error) { throw new AppError(400, "INVALID_URL", (error as Error).message); }
+      const videoIds = await provider.playlist(playlist.playlistId);
+      return { playlistId: playlist.playlistId, originalUrl: playlist.originalUrl, videoIds };
+    }),
     extract: handler(async (body, secret) => {
       let video: ReturnType<typeof parseYouTubeUrl>;
       try { video = parseYouTubeUrl(body.url); }

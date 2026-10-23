@@ -2,6 +2,7 @@ import "server-only";
 import { AppError, externalError } from "./errors.ts";
 import { isRecord, readLimitedJson } from "./http.ts";
 import type { TranscriptSegment } from "../transcript.ts";
+import { MAX_PLAYLIST_VIDEOS } from "../playlist.ts";
 
 export const UPSTREAM_TIMEOUT_MS = 15_000;
 export const MAX_EXTERNAL_BYTES = 2_000_000;
@@ -36,7 +37,7 @@ function parseTranscript(data: unknown): ProviderResult {
 }
 
 export function createSupadata(apiKey: string | undefined, fetcher: typeof fetch) {
-  async function call(url: URL, job: boolean): Promise<ProviderResult> {
+  async function request<T>(url: URL, parse: (data: Record<string, unknown>, status: number) => T): Promise<T> {
     if (!apiKey?.trim() || /[\r\n]/.test(apiKey)) {
       throw new AppError(503, "PROVIDER_CONFIG", "A chave da Supadata precisa ser configurada pelo responsável pela aplicação.");
     }
@@ -54,6 +55,18 @@ export function createSupadata(apiKey: string | undefined, fetcher: typeof fetch
       }
       const data = await readLimitedJson(response, MAX_EXTERNAL_BYTES);
       if (!isRecord(data)) throw externalError(502);
+      return parse(data, response.status);
+    } catch (error) {
+      if (error instanceof AppError && !["TOO_LARGE", "INVALID_JSON"].includes(error.code)) throw error;
+      if (error instanceof Error && ["TimeoutError", "AbortError"].includes(error.name)) {
+        throw new AppError(504, "UPSTREAM_TIMEOUT", "O serviço de legendas demorou a responder. Tente novamente mais tarde.");
+      }
+      throw externalError(502);
+    }
+  }
+
+  function call(url: URL, job: boolean): Promise<ProviderResult> {
+    return request(url, (data, status) => {
       if (job) {
         if (data.status === "queued" || data.status === "active") return { status: "pending" };
         if (data.status === "failed") {
@@ -64,20 +77,39 @@ export function createSupadata(apiKey: string | undefined, fetcher: typeof fetch
         // Official examples use both flattened responses and a result envelope.
         return parseTranscript(data.result ?? data);
       }
-      if (response.status === 202 || "jobId" in data) {
+      if (status === 202 || "jobId" in data) {
         if (!validJobId(data.jobId)) throw externalError(502);
         return { status: "pending", jobId: data.jobId };
       }
       return parseTranscript(data);
-    } catch (error) {
-      if (error instanceof AppError && !["TOO_LARGE", "INVALID_JSON"].includes(error.code)) throw error;
-      if (error instanceof Error && ["TimeoutError", "AbortError"].includes(error.name)) {
-        throw new AppError(504, "UPSTREAM_TIMEOUT", "O serviço de legendas demorou a responder. Tente novamente mais tarde.");
-      }
-      throw externalError(502);
-    }
+    });
   }
   return {
+    async playlist(playlistId: string): Promise<string[]> {
+      const url = new URL("https://api.supadata.ai/v1/youtube/playlist/videos");
+      url.search = new URLSearchParams({ id: playlistId, limit: String(MAX_PLAYLIST_VIDEOS) }).toString();
+      try {
+        return await request(url, (data, status) => {
+          if (status !== 200) throw externalError(502);
+          const ids: string[] = [];
+          for (const field of ["videoIds", "shortIds", "liveIds"]) {
+            const values = data[field];
+            if (!Array.isArray(values) || values.some((id) => typeof id !== "string" || !/^[A-Za-z0-9_-]{11}$/.test(id))) throw externalError(502);
+            if (values.length >= MAX_PLAYLIST_VIDEOS) throw new AppError(422, "PLAYLIST_LIMIT", "A playlist atingiu o limite de 5.000 vídeos da consulta. Divida-a em playlists menores para coletar todos os vídeos.");
+            ids.push(...values);
+          }
+          const unique = [...new Set(ids)];
+          if (unique.length >= MAX_PLAYLIST_VIDEOS) throw new AppError(422, "PLAYLIST_LIMIT", "A playlist atingiu o limite de 5.000 vídeos da consulta. Divida-a em playlists menores para coletar todos os vídeos.");
+          if (!unique.length) throw new AppError(422, "EMPTY_PLAYLIST", "A playlist está vazia ou não contém vídeos públicos acessíveis.");
+          return unique;
+        });
+      } catch (error) {
+        if (error instanceof AppError && error.code === "VIDEO_UNAVAILABLE") {
+          throw new AppError(422, "PLAYLIST_UNAVAILABLE", "A playlist não foi encontrada, é privada ou não está acessível.");
+        }
+        throw error;
+      }
+    },
     extract(canonicalUrl: string) {
       const url = new URL(API_URL);
       url.search = new URLSearchParams({ url: canonicalUrl, mode: "native", text: "false" }).toString();
