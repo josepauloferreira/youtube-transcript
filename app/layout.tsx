@@ -1,5 +1,8 @@
 import type { Metadata, Viewport } from "next";
+import { Geist } from "next/font/google";
 import "./globals.css";
+
+const geist = Geist({ subsets: ["latin"], display: "swap", variable: "--font-geist" });
 
 export const metadata: Metadata = {
   title: "YouTube Transcript — legendas em texto",
@@ -17,5 +20,5 @@ export const viewport: Viewport = {
 };
 
 export default function RootLayout({ children }: Readonly<{ children: React.ReactNode }>) {
-  return <html lang="pt-BR"><body>{children}</body></html>;
+  return <html lang="pt-BR" className={geist.variable}><body>{children}</body></html>;
 }
